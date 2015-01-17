@@ -1,19 +1,21 @@
 package main
 
 import (
+	"container/list"
+	"encoding/json"
 	"fmt"
 	log "github.com/cihub/seelog"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"regexp"
-	"runtime/debug"
 	"strconv"
 	"strings"
-	"time"
 )
 
 var setting Settings
+
+var hshList *list.List
 
 var picMap map[string]string
 
@@ -22,61 +24,85 @@ func main() {
 	fmt.Println("程序开始...")
 	log.Info("程序开始...")
 	setting = loadConfig()
-	picMap = make(map[string]string, 1000)
-	log.Info("请求地址：" + setting.BingUrl)
-	loop := make(chan bool)
-	go downloadloop(loop)
+	initContainer(setting.MaxDlCount) //初始化map,list
+	getHashOfHpWall()                 //获取墙纸的hash
+	dlPic()                           //下载墙纸
+	fmt.Println("程序退出！")
+	log.Info("程序退出！")
 
-	ret := <-loop
-
-	if !ret {
-		fmt.Println("程序退出！")
-		log.Info("程序退出！")
-		close(loop)
-		os.Exit(0)
-	}
+	os.Exit(0)
 }
-func downloadloop(loop chan bool) {
-	var t time.Duration = time.Minute * time.Duration(setting.IntervalTime)
-	var url = setting.BingUrl
-	fmt.Println("循环开始！时间间隔：" + t.String())
-	log.Info("循环开始！时间间隔：" + t.String())
-	for {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Info(err)
-				log.Info("Stack trace:\n" + string(debug.Stack()))
-				log.Info("Got panic in goroutine, will start a new one...")
-				go downloadloop(loop)
-			}
-		}()
-		data := getDataFromUrl(url)
-		s := analyzeHtml(string(data))
-		fmt.Println(s)
-		log.Info("获得图片地址：" + s)
-		getPic(s, setting.SaveDir)
-
-		time.Sleep(t)
-	}
-	log.Info("循环结束！")
-	loop <- false
+func expHandler() {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println(err)
+		}
+	}()
 }
-func getPic(jpgUrl string, savePath string) string {
+func initContainer(count int) {
+	picMap = make(map[string]string, count)
+	hshList = list.New()
+}
+func getHashOfHpWall() {
+	for i := 1; i <= setting.MaxDlCount; i++ {
+		reqObj := NewReqMsg(i)
+		rspObj := getDataFromUrlAndData(setting.NextHpUrl + "?" + buildReqParams(reqObj))
+		var rspMsg RspMsg
+		json.Unmarshal(rspObj, &rspMsg)
+		if len(rspMsg.Images) > 0 {
 
-	data := getDataFromUrl(jpgUrl)
-	sary := strings.Split(jpgUrl, "/")
-	name := sary[len(sary)-1]
+			log.Info(rspMsg.Images[0].Hsh)
+			hshList.PushFront(rspMsg.Images[0].Hsh)
+		}
+	}
+	log.Info("抓取数据数量:", hshList.Len())
+}
+func buildReqParams(reqObj *ReqMsg) string {
+	values := "format=" + reqObj.Format
+	values = values + "&idx=" + strconv.Itoa(reqObj.Idx)
+	values = values + "&n=" + strconv.Itoa(reqObj.N)
 
-	path := savePath + name
-	p, exist := picMap[name]
+	values = values + "&nc=" + strconv.FormatInt(reqObj.Nc, 10)
+	values = values + "&pid=" + reqObj.Pid
+	return values
+}
+func dlPic() {
+	log.Info("开始请求图片...")
+	var n *list.Element
+	for e := hshList.Front(); e != nil; e = n {
+
+		url := setting.DlUrl + parseStr(e.Value)
+		fmt.Println("下载-", url)
+		dl(url)
+		n = e.Next()
+		hshList.Remove(e)
+	}
+
+}
+func parseStr(value interface{}) string {
+	str, ok := value.(string)
+	if ok {
+		return str
+	} else {
+		panic("Parse error")
+	}
+
+}
+func dl(url string) string {
+	data, filename := getDataFromUrl(url)
+	if filename == "fail" {
+		return "fail"
+	}
+	path := setting.SaveDir + filename
+	p, exist := picMap[filename]
 	if exist {
-		fmt.Println("图片[" + name + "]已下载过,保存目录[" + p + "]")
-		log.Info("图片[" + name + "]已下载过,保存目录[" + p + "]")
+		fmt.Println("图片[" + filename + "]已下载过,保存目录[" + p + "]")
+		log.Info("图片[" + filename + "]已下载过,保存目录[" + p + "]")
 		return p
 	}
 	if len(data) > 10 {
-		fmt.Println("[" + name + "]")
-		file, err := os.Create(savePath + name)
+		fmt.Println("[" + filename + "]")
+		file, err := os.Create(path)
 		if err != nil {
 			panic(err)
 		}
@@ -88,7 +114,7 @@ func getPic(jpgUrl string, savePath string) string {
 		fmt.Println("下载完成,保存为:[" + path + "],文件大小:" + strconv.Itoa(size))
 		log.Info("下载完成,保存为:[" + path + "],文件大小:" + strconv.Itoa(size))
 	}
-	picMap[name] = path
+	picMap[filename] = path
 	return path
 }
 func analyzeHtml(htmlStr string) string {
@@ -104,16 +130,53 @@ func analyzeHtml(htmlStr string) string {
 	return ""
 }
 
-func getDataFromUrl(url string) []byte {
+func getDataFromUrl(url string) ([]byte, string) {
 
 	rsp, err := http.Get(url)
 	if err != nil {
 		panic(err)
 	}
 	defer rsp.Body.Close()
+	filename := analyseContentDisposition(rsp.Header)
 	data, err := ioutil.ReadAll(rsp.Body)
 	if err != nil {
 		panic(err)
 	}
-	return data
+
+	return data, filename
+}
+
+func analyseContentDisposition(header http.Header) string {
+	log.Info(header)
+	disposition := header.Get("Content-Disposition")
+	log.Info(disposition)
+	canSplit := func(c rune) bool { return c == ';' || c == '=' || c == ' ' }
+	ary := strings.FieldsFunc(disposition, canSplit)
+	if len(ary) == 3 && ary[0] == "attachment" && ary[1] == "filename" {
+		return ary[2]
+	}
+	return "fail"
+}
+func getDataFromUrlAndData(url string) []byte {
+
+	req, err := http.NewRequest("GET", url, nil)
+
+	if err != nil {
+		log.Debug(err)
+		panic(err)
+	}
+	client := new(http.Client)
+	rsp, err := client.Do(req)
+	if err != nil {
+		log.Debug(err)
+		panic(err)
+	}
+	defer rsp.Body.Close()
+	rspData, err := ioutil.ReadAll(rsp.Body)
+	if err != nil {
+		log.Debug(err)
+		panic(err)
+	}
+	log.Debug("Request: " + url + " ,Rsp: " + string(rspData))
+	return rspData
 }

@@ -10,6 +10,9 @@ import (
 type Settings struct {
 	SaveDir      string
 	BingUrl      string
+	NextHpUrl    string
+	DlUrl        string
+	MaxDlCount   int
 	IntervalTime int
 }
 

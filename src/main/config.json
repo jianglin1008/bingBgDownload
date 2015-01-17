@@ -1,5 +1,8 @@
 {
-  "saveDir":      "/Users/jianglin/Pictures/",
-  "bingUrl":      "http://cn.bing.com/",
+  "saveDir": "/Users/jianglin/Pictures/",
+  "bingUrl": "http://cn.bing.com/",
+  "nextHpUrl": "http://cn.bing.com/HPImageArchive.aspx",
+  "dlUrl": "http://cn.bing.com/hpwp/",
+  "maxDlCount": 100,
   "intervalTime": 10
 }
