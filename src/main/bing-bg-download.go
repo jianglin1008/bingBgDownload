@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/list"
 	"encoding/json"
 	"fmt"
 	log "github.com/cihub/seelog"
@@ -15,8 +14,6 @@ import (
 
 var setting Settings
 
-var hshList *list.List
-
 var picMap map[string]string
 
 func main() {
@@ -26,7 +23,7 @@ func main() {
 	setting = loadConfig()
 	initContainer(setting.MaxDlCount) //初始化map,list
 	getHashOfHpWall()                 //获取墙纸的hash
-	dlPic()                           //下载墙纸
+
 	fmt.Println("程序退出！")
 	log.Info("程序退出！")
 
@@ -41,21 +38,25 @@ func expHandler() {
 }
 func initContainer(count int) {
 	picMap = make(map[string]string, count)
-	hshList = list.New()
+
 }
 func getHashOfHpWall() {
+	var count int = 0
 	for i := 1; i <= setting.MaxDlCount; i++ {
 		reqObj := NewReqMsg(i)
 		rspObj := getDataFromUrlAndData(setting.NextHpUrl + "?" + buildReqParams(reqObj))
 		var rspMsg RspMsg
 		json.Unmarshal(rspObj, &rspMsg)
+
 		if len(rspMsg.Images) > 0 {
 
-			log.Info(rspMsg.Images[0].Hsh)
-			hshList.PushFront(rspMsg.Images[0].Hsh)
+			log.Debug(rspMsg.Images[0].Hsh)
+			url := setting.DlUrl + rspMsg.Images[0].Hsh
+			count++
+			go dl(url)
 		}
 	}
-	log.Info("抓取数据数量:", hshList.Len())
+	log.Info("抓取数据数量:", count)
 }
 func buildReqParams(reqObj *ReqMsg) string {
 	values := "format=" + reqObj.Format
@@ -65,19 +66,6 @@ func buildReqParams(reqObj *ReqMsg) string {
 	values = values + "&nc=" + strconv.FormatInt(reqObj.Nc, 10)
 	values = values + "&pid=" + reqObj.Pid
 	return values
-}
-func dlPic() {
-	log.Info("开始请求图片...")
-	var n *list.Element
-	for e := hshList.Front(); e != nil; e = n {
-
-		url := setting.DlUrl + parseStr(e.Value)
-		fmt.Println("下载-", url)
-		dl(url)
-		n = e.Next()
-		hshList.Remove(e)
-	}
-
 }
 func parseStr(value interface{}) string {
 	str, ok := value.(string)
@@ -95,9 +83,10 @@ func dl(url string) string {
 	}
 	path := setting.SaveDir + filename
 	p, exist := picMap[filename]
-	if exist {
-		fmt.Println("图片[" + filename + "]已下载过,保存目录[" + p + "]")
-		log.Info("图片[" + filename + "]已下载过,保存目录[" + p + "]")
+
+	if exist || fileExist(path) {
+		fmt.Println("图片[" + filename + "]已存在,位置[" + path + "]")
+		log.Info("图片[" + filename + "]已存在,位置[" + path + "]")
 		return p
 	}
 	if len(data) > 10 {
@@ -147,9 +136,9 @@ func getDataFromUrl(url string) ([]byte, string) {
 }
 
 func analyseContentDisposition(header http.Header) string {
-	log.Info(header)
+	log.Debug(header)
 	disposition := header.Get("Content-Disposition")
-	log.Info(disposition)
+	log.Debug(disposition)
 	canSplit := func(c rune) bool { return c == ';' || c == '=' || c == ' ' }
 	ary := strings.FieldsFunc(disposition, canSplit)
 	if len(ary) == 3 && ary[0] == "attachment" && ary[1] == "filename" {
@@ -179,4 +168,8 @@ func getDataFromUrlAndData(url string) []byte {
 	}
 	log.Debug("Request: " + url + " ,Rsp: " + string(rspData))
 	return rspData
+}
+func fileExist(filename string) bool {
+	_, err := os.Stat(filename)
+	return err == nil || os.IsExist(err)
 }

@@ -1,0 +1,8 @@
+<seelog>
+    <outputs formatid="critical">
+        <rollingfile type="size" filename="./run.log" maxsize="10000" maxrolls="5" />
+    </outputs>
+    <formats>
+        <format id="critical" format="%Time %Date [%LEV] %Msg %n"/>
+    </formats>
+</seelog>
